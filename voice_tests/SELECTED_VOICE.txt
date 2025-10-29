@@ -1,0 +1,9 @@
+JARVIS VOICE CONFIGURATION
+=========================
+
+Voice: hi-IN-ArjunNeural (Male, Indian)
+Rate: +11%
+Pitch: +7Hz
+Description: Slightly Energetic + Calm
+Your Rating: 5/5
+Review: great

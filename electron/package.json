@@ -1,0 +1,35 @@
+{
+  "name": "jarvis-assistant",
+  "version": "1.0.0",
+  "description": "Jarvis - Hybrid Voice Assistant with Electron UI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win"
+  },
+  "keywords": [
+    "voice-assistant",
+    "electron",
+    "jarvis",
+    "ai"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^27.0.0",
+    "electron-builder": "^24.6.4"
+  },
+  "dependencies": {},
+  "build": {
+    "appId": "com.jarvis.assistant",
+    "productName": "Jarvis Assistant",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "timestamp": "2025-10-28T03:49:39.279013",
+  "winner": "Edge TTS (Microsoft)",
+  "winner_rating": 3.25,
+  "all_results": [
+    {
+      "name": "Edge TTS (Microsoft)",
+      "type": "online",
+      "ratings": {
+        "Guy (US Male - Calm)": 4,
+        "Prabhat (Indian Male - Perfect for Hindi+English!)": 3,
+        "Ryan (UK Male - Professional)": 4,
+        "Hindi (Madhur)": 2
+      },
+      "reviews": {
+        "Guy (US Male - Calm)": "good",
+        "Prabhat (Indian Male - Perfect for Hindi+English!)": "will sleep",
+        "Ryan (UK Male - Professional)": "gelt-great",
+        "Hindi (Madhur)": "sleep"
+      },
+      "avg": 3.25,
+      "speed": "Fast",
+      "quality": "Natural",
+      "hindi_support": true,
+      "cost": "Free"
+    },
+    {
+      "name": "gTTS (Google)",
+      "type": "online",
+      "ratings": {
+        "english": 2,
+        "hindi": 2
+      },
+      "reviews": {
+        "english": "vibrating_reverbering",
+        "hindi": "slw"
+      },
+      "avg": 2.0,
+      "speed": "Fast",
+      "quality": "Robotic",
+      "hindi_support": true,
+      "cost": "Free"
+    },
+    {
+      "name": "pyttsx3 (System Voices)",
+      "type": "offline",
+      "ratings": {
+        "Microsoft David Desktop - English (United States)": 0
+      },
+      "reviews": {
+        "Microsoft David Desktop - English (United States)": "skipped"
+      },
+      "avg": 0.0,
+      "speed": "Very Fast",
+      "quality": "Robotic",
+      "hindi_support": "Limited",
+      "cost": "Free"
+    }
+  ],
+  "recommendation": {
+    "primary_voice": "Edge TTS (Microsoft)",
+    "hindi_support": true,
+    "type": "online"
+  }
+}
