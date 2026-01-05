@@ -1,0 +1,2 @@
+# Sample File 2
+This is another test file for git commit and push.
