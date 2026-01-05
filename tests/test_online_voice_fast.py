@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Load environment from backend/.env
 load_dotenv('backend/.env')
 
-from backend.core import stt_online, brain, tts_manager, mongo_manager
+from backend.core import stt_online, brain, tts_manager, tts_online, mongo_manager
 
 print("=" * 70)
 print("🌐 JARVIS ONLINE VOICE PIPELINE - SPEED OPTIMIZED")
@@ -178,23 +178,20 @@ try:
     
     start_tts = time.time()
     audio_path, engine = tts_manager.speak(response, lang='en', prefer_offline=False)
+    
+    if audio_path:
+        # Play the audio using the tts_online play function
+        tts_online.play_audio(audio_path)
+        # Clean up audio file
+        try:
+            os.remove(audio_path)
+        except:
+            pass
+    
     tts_time = time.time() - start_tts
     
     print(f"   Engine: {engine}")
     print(f"   ⏱️  {tts_time:.2f}s")
-    
-    if audio_path:
-        # Play audio
-        if audio_path.endswith('.mp3'):
-            from pygame import mixer
-            mixer.init()
-            mixer.music.load(audio_path)
-            mixer.music.play()
-            while mixer.music.get_busy():
-                time.sleep(0.1)
-        elif audio_path.endswith('.wav'):
-            import winsound
-            winsound.PlaySound(audio_path, winsound.SND_FILENAME)
     
     # Clean up
     if os.path.exists(OUTPUT_FILE):

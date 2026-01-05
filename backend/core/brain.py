@@ -5,6 +5,7 @@ The "brain" of Jarvis that processes user commands and routes to appropriate ski
 
 import logging
 import re
+import time
 from typing import Dict, Callable, Any, Optional
 from datetime import datetime
 
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Import skills
 try:
-    from backend.skills import open_app, alarms
+    from backend.skills import open_app, alarms, youtube_skill, file_ops, system_info, music_player, weather_skill
 except ImportError as e:
     logger.warning(f"Some skills not available yet: {e}")
 
@@ -231,10 +232,14 @@ def load_conversation_context(user_id: str, limit: int = 3) -> list:
         # Format for context: [{user: "...", assistant: "..."}]
         context = []
         for item in history:
+            # Use correct field names from new schema
             context.append({
-                "user": item.get("user_text", ""),
-                "assistant": item.get("assistant_text", "")
+                "user": item.get("user_query", ""),
+                "assistant": item.get("jarvis_response", "")
             })
+        
+        # Reverse to get chronological order (oldest first)
+        context.reverse()
         
         logger.debug(f"Loaded {len(context)} conversation exchanges for context")
         return context
@@ -242,6 +247,35 @@ def load_conversation_context(user_id: str, limit: int = 3) -> list:
     except Exception as e:
         logger.warning(f"Failed to load conversation context: {e}")
         return []
+
+
+def is_asking_about_history(text: str) -> bool:
+    """
+    Detect if user is asking about previous conversations.
+    
+    Args:
+        text: User's query
+    
+    Returns:
+        bool: True if asking about conversation history
+    
+    Examples:
+        "what did I ask before?" → True
+        "what was my first question?" → True
+        "show me our previous chat" → True
+        "what time is it?" → False
+    """
+    text_lower = text.lower()
+    
+    # Keywords indicating history lookup
+    history_keywords = [
+        "previous", "earlier", "before", "first", "last",
+        "ago", "asked", "said", "told", "conversation",
+        "chat", "history", "what did i", "what was my",
+        "remember", "recall", "पहले", "पिछला", "बोला था"
+    ]
+    
+    return any(keyword in text_lower for keyword in history_keywords)
 
 
 def save_conversation(user_id: str, user_input: str, assistant_response: str):
@@ -254,8 +288,16 @@ def save_conversation(user_id: str, user_input: str, assistant_response: str):
         assistant_response: What Jarvis responded
     """
     try:
-        # Use direct function call
-        mongo_manager.save_conversation(user_input, assistant_response, intent=None)
+        # Use new Dict-based signature
+        mongo_manager.save_conversation({
+            "user_query": user_input,
+            "jarvis_response": assistant_response,
+            "intent": "chat",  # Default intent for brain.py internal saves
+            "language_detected": "unknown",
+            "expects_followup": False,
+            "performance": {},
+            "timestamp": time.time()
+        })
         logger.debug(f"Saved conversation to MongoDB")
     
     except Exception as e:
@@ -282,8 +324,7 @@ def get_date() -> str:
 SKILLS: Dict[str, Callable] = {
     "time": get_time,
     "date": get_date,
-    # "open": open_app.open_app,  # Uncomment when open_app is ready
-    # "alarm": alarms.set_alarm,  # Uncomment when alarms is ready
+    # skills registered dynamically below if available
 }
 
 
@@ -291,7 +332,7 @@ SKILLS: Dict[str, Callable] = {
 # COMMAND PROCESSING
 # ============================================================================
 
-def process_command(text: str, user_id: str = "default_user") -> Dict[str, Any]:
+def process_command(text: str, user_id: str = "default_user", user_language: str = "en") -> Dict[str, Any]:
     """
     Process user command and route to appropriate skill.
     
@@ -300,13 +341,14 @@ def process_command(text: str, user_id: str = "default_user") -> Dict[str, Any]:
     2. Check for quick replies (thanks, ok, hello) - no LLM needed
     3. Try keyword matching for common commands
     4. Load conversation context from MongoDB
-    5. Use Qwen LLM with context for complex queries
+    5. Use Qwen LLM with context for complex queries (in user's language)
     6. Save conversation to MongoDB
     7. Return response
     
     Args:
         text: User's spoken/typed command
         user_id: Unique identifier for user (for conversation context)
+        user_language: Language user spoke in ('en', 'hi', 'unknown'/'mixed')
     
     Returns:
         Dict with response, intent, and any additional data
@@ -317,13 +359,13 @@ def process_command(text: str, user_id: str = "default_user") -> Dict[str, Any]:
         }
     
     Examples:
-        Input: "What time is it?"
+        Input: "What time is it?", user_language="en"
         Output: {"response": "It's 10:30 AM", "intent": "time", "success": True}
         
-        Input: "Thanks"
-        Output: {"response": "My pleasure.", "intent": "quick_reply", "success": True}
+        Input: "समय क्या है?", user_language="hi"
+        Output: {"response": "अभी 10:30 AM है", "intent": "time", "success": True}
     """
-    logger.info(f"Processing command: '{text}'")
+    logger.info(f"Processing command: '{text}' (language: {user_language})")
     
     # Normalize input
     original_text = text
@@ -397,9 +439,29 @@ def process_command(text: str, user_id: str = "default_user") -> Dict[str, Any]:
         if match:
             app_name = match.group(1)
             try:
-                # TODO: Uncomment when open_app skill is ready
-                # result = open_app.open_app(app_name)
-                result = f"Opening {app_name}."
+                # Check if it looks like a website (contains .com, .org, etc.)
+                if "." in original_text or any(tld in text_lower for tld in [".com", ".org", ".net", ".io", "youtube", "google", "github", "reddit"]):
+                    # Extract full URL/domain
+                    url_match = re.search(r"open\s+(.+)", text_lower)
+                    if url_match and 'music_player' in globals():
+                        url = url_match.group(1).strip()
+                        res = music_player.open_link(url)
+                        return {
+                            "response": res,
+                            "intent": "open_website",
+                            "url": url,
+                            "success": True
+                        }
+                
+                # Use open_app skill if available
+                if 'open_app' in globals():
+                    try:
+                        result = open_app.open_app(app_name)
+                    except Exception:
+                        result = f"Opening {app_name}."
+                else:
+                    result = f"Opening {app_name}."
+
                 return {
                     "response": result,
                     "intent": "open_app",
@@ -418,19 +480,321 @@ def process_command(text: str, user_id: str = "default_user") -> Dict[str, Any]:
     # Alarm/reminder
     if any(keyword in text_lower for keyword in ["alarm", "remind", "reminder"]):
         try:
-            # TODO: Parse time and description from text
-            # For now, placeholder
-            return {
-                "response": "Alarm functionality coming soon.",
-                "intent": "alarm",
-                "success": False,
-                "note": "not_implemented"
-            }
+            # Parse alarm and set using alarms skill if available
+            if 'alarms' in globals():
+                desc, scheduled_time = alarms.parse_alarm_from_text(original_text)
+                if desc and scheduled_time:
+                    res = alarms.set_alarm(desc, scheduled_time)
+                    return {
+                        "response": res,
+                        "intent": "alarm",
+                        "success": True
+                    }
+                else:
+                    return {
+                        "response": "I couldn't parse the alarm time. Please say 'Set alarm for 5pm' or 'Remind me in 10 minutes'.",
+                        "intent": "alarm",
+                        "success": False,
+                        "note": "parse_failed"
+                    }
+            else:
+                return {
+                    "response": "Alarm functionality not available.",
+                    "intent": "alarm",
+                    "success": False,
+                    "note": "not_available"
+                }
         except Exception as e:
             logger.error(f"Alarm skill error: {e}")
             return {
                 "response": "Sorry, I couldn't set the alarm.",
                 "intent": "alarm",
+                "success": False,
+                "error": str(e)
+            }
+    
+    # YouTube playback and Music (Spotify/YouTube)
+    if any(keyword in text_lower for keyword in ["play", "youtube", "spotify", "song"]):
+        try:
+            # Use AI to extract both song name AND platform intelligently
+            query = None
+            platform = None
+            
+            try:
+                from backend.core.qwen_api import chat_completion
+                
+                extraction_prompt = f"""Analyze this music command and extract the song name and platform.
+
+Command: "{original_text}"
+
+Return in this exact format:
+SONG: [song name here]
+PLATFORM: [spotify/youtube/default]
+
+Rules:
+- Extract the actual song/artist name (remove: "play", "on", "song", "the")
+- Detect platform: If command mentions "spotify", return "spotify". If mentions "youtube", return "youtube". Otherwise return "default"
+- Be smart about extraction
+
+Examples:
+"play tears on spotify" → 
+SONG: tears
+PLATFORM: spotify
+
+"song tears on youtube" →
+SONG: tears
+PLATFORM: youtube
+
+"the song tears" →
+SONG: tears
+PLATFORM: default
+
+"play shape of you" →
+SONG: shape of you
+PLATFORM: default
+
+Now analyze:"""
+
+                messages = [
+                    {"role": "system", "content": "You are a music command analyzer. Extract song name and platform. Return in the exact format requested."},
+                    {"role": "user", "content": extraction_prompt}
+                ]
+                
+                ai_response = chat_completion(messages, temperature=0.1, max_tokens=100, use_personality=False)
+                
+                # Parse AI response
+                if ai_response and not ai_response.startswith("Error"):
+                    lines = ai_response.strip().split('\n')
+                    for line in lines:
+                        if line.startswith("SONG:"):
+                            query = line.replace("SONG:", "").strip().strip('"').strip("'")
+                        elif line.startswith("PLATFORM:"):
+                            platform = line.replace("PLATFORM:", "").strip().lower()
+                    
+                    if query:
+                        logger.info(f"AI extracted - Song: '{query}', Platform: '{platform}' from '{original_text}'")
+                    else:
+                        raise ValueError("AI failed to extract song name")
+                else:
+                    raise ValueError("AI returned error or invalid response")
+                
+            except Exception as e:
+                logger.warning(f"AI extraction failed, using regex fallback: {e}")
+                # Fallback to regex if AI fails
+                query = None
+                platform = None
+                
+                # Detect platform first
+                if "spotify" in text_lower:
+                    platform = "spotify"
+                elif "youtube" in text_lower:
+                    platform = "youtube"
+                else:
+                    platform = "default"
+                
+                # Pattern 1: "play X on spotify/youtube" 
+                match = re.search(r"play\s+(.+?)\s+on\s+(?:spotify|youtube)", text_lower)
+                if match:
+                    query = match.group(1).strip()
+                
+                # Pattern 2: "song X on spotify/youtube"
+                if not query:
+                    match = re.search(r"song\s+(.+?)\s+on\s+(?:spotify|youtube)", text_lower)
+                    if match:
+                        query = match.group(1).strip()
+                
+                # Pattern 3: "play X spotify/youtube" (without "on")
+                if not query:
+                    match = re.search(r"play\s+(.+?)\s+(?:spotify|youtube)", text_lower)
+                    if match:
+                        query = match.group(1).strip()
+                
+                # Pattern 4: "the song X on spotify/youtube"
+                if not query:
+                    match = re.search(r"(?:the\s+)?song\s+(.+?)\s+on\s+(?:spotify|youtube)", text_lower)
+                    if match:
+                        query = match.group(1).strip()
+                
+                # Pattern 5: "the song X" (any remaining text)
+                if not query:
+                    match = re.search(r"(?:the\s+)?song\s+(.+)", text_lower)
+                    if match:
+                        # Remove platform keywords if present
+                        query = match.group(1).strip()
+                        query = query.replace("spotify", "").replace("youtube", "").strip()
+                
+                # Pattern 6: Just "play X" (any remaining text)
+                if not query:
+                    match = re.search(r"play\s+(.+)", text_lower)
+                    if match:
+                        # Remove platform keywords if present
+                        query = match.group(1).strip()
+                        query = query.replace("spotify", "").replace("youtube", "").strip()
+                
+                logger.info(f"Regex extracted - Song: '{query}', Platform: '{platform}' from '{original_text}'")
+            
+            if not query:
+                return {
+                    "response": "What would you like me to play?",
+                    "intent": "music",
+                    "success": False,
+                    "note": "no_query"
+                }
+            
+            # Use music_player skill
+            if 'music_player' in globals():
+                # Route based on detected platform
+                if platform == "spotify":
+                    res = music_player.play_on_spotify(query)
+                    intent = "spotify"
+                elif platform == "youtube":
+                    res = music_player.play_on_youtube(query)
+                    intent = "youtube"
+                else:
+                    # Default to YouTube when no platform specified (FREE, no premium needed!)
+                    res = music_player.play_on_youtube(query)
+                    intent = "youtube"
+                
+                return {
+                    "response": res,
+                    "intent": intent,
+                    "query": query,
+                    "platform": platform,
+                    "success": True
+                }
+            else:
+                return {
+                    "response": "Music playback not available.",
+                    "intent": "music",
+                    "success": False,
+                    "note": "not_available"
+                }
+        except Exception as e:
+            logger.error(f"Music playback error: {e}")
+            return {
+                "response": "Sorry, I couldn't play that.",
+                "intent": "music",
+                "success": False,
+                "error": str(e)
+            }
+    
+    # Open website/link
+    if any(keyword in text_lower for keyword in [".com", ".org", ".net", ".io", "http", "www"]) or \
+       (text_lower.startswith("open ") and "." in text_lower):
+        try:
+            # Extract URL
+            url = original_text.replace("open", "").replace("Open", "").strip()
+            
+            if 'music_player' in globals():
+                res = music_player.open_link(url)
+                return {
+                    "response": res,
+                    "intent": "open_link",
+                    "url": url,
+                    "success": True
+                }
+            else:
+                import webbrowser
+                if not url.startswith("http"):
+                    url = f"https://{url}"
+                webbrowser.open(url)
+                return {
+                    "response": f"Opened {url}",
+                    "intent": "open_link",
+                    "url": url,
+                    "success": True
+                }
+        except Exception as e:
+            logger.error(f"Open link error: {e}")
+            return {
+                "response": "Sorry, I couldn't open that link.",
+                "intent": "open_link",
+                "success": False,
+                "error": str(e)
+            }
+    
+    # File operations
+    if any(keyword in text_lower for keyword in ["create file", "open file"]):
+        try:
+            if 'file_ops' in globals():
+                operation, filepath, content = file_ops.parse_file_command(original_text)
+                
+                if operation == "create":
+                    res = file_ops.create_file(filepath, content or "")
+                    return {
+                        "response": res,
+                        "intent": "file_create",
+                        "filepath": filepath,
+                        "success": True
+                    }
+                elif operation == "open":
+                    res = file_ops.open_file(filepath)
+                    return {
+                        "response": res,
+                        "intent": "file_open",
+                        "filepath": filepath,
+                        "success": True
+                    }
+                else:
+                    return {
+                        "response": "I couldn't understand the file command. Try 'Create file named test.txt' or 'Open file document.pdf'",
+                        "intent": "file_ops",
+                        "success": False,
+                        "note": "parse_failed"
+                    }
+            else:
+                return {
+                    "response": "File operations not available.",
+                    "intent": "file_ops",
+                    "success": False,
+                    "note": "not_available"
+                }
+        except Exception as e:
+            logger.error(f"File ops error: {e}")
+            return {
+                "response": "Sorry, I couldn't complete the file operation.",
+                "intent": "file_ops",
+                "success": False,
+                "error": str(e)
+            }
+    
+    # System info
+    if any(keyword in text_lower for keyword in ["battery", "cpu", "memory", "ram", "disk", "system info"]):
+        try:
+            if 'system_info' in globals():
+                if "battery" in text_lower:
+                    res = system_info.get_battery_status()
+                    intent = "battery"
+                elif "cpu" in text_lower:
+                    res = system_info.get_cpu_usage()
+                    intent = "cpu"
+                elif any(kw in text_lower for kw in ["memory", "ram"]):
+                    res = system_info.get_memory_usage()
+                    intent = "memory"
+                elif "disk" in text_lower:
+                    res = system_info.get_disk_usage()
+                    intent = "disk"
+                else:
+                    res = system_info.get_system_info()
+                    intent = "system_info"
+                
+                return {
+                    "response": res,
+                    "intent": intent,
+                    "success": True
+                }
+            else:
+                return {
+                    "response": "System info not available.",
+                    "intent": "system_info",
+                    "success": False,
+                    "note": "not_available"
+                }
+        except Exception as e:
+            logger.error(f"System info error: {e}")
+            return {
+                "response": "Sorry, I couldn't get system information.",
+                "intent": "system_info",
                 "success": False,
                 "error": str(e)
             }
@@ -443,6 +807,34 @@ def process_command(text: str, user_id: str = "default_user") -> Dict[str, Any]:
             "success": False,
             "note": "Use /summarize_pdf endpoint instead"
         }
+
+    # Weather skill
+    if "weather" in text_lower:
+        try:
+            if 'weather_skill' in globals():
+                location = weather_skill.parse_weather_command(original_text)
+                res = weather_skill.get_weather(location)
+                return {
+                    "response": res,
+                    "intent": "weather",
+                    "location": location or "current",
+                    "success": True
+                }
+            else:
+                return {
+                    "response": "Weather skill not available.",
+                    "intent": "weather",
+                    "success": False,
+                    "note": "not_available"
+                }
+        except Exception as e:
+            logger.error(f"Weather skill error: {e}")
+            return {
+                "response": "Sorry, I couldn't check the weather.",
+                "intent": "weather",
+                "success": False,
+                "error": str(e)
+            }
     
     # ========================================================================
     # LLM WITH CONVERSATION CONTEXT
@@ -451,8 +843,16 @@ def process_command(text: str, user_id: str = "default_user") -> Dict[str, Any]:
     try:
         logger.info("No keyword match - using LLM with conversation context")
         
-        # 🧠 Load conversation history from MongoDB
-        conversation_context = load_conversation_context(user_id)
+        # 🧠 Detect if user is asking about previous conversations
+        asking_about_history = is_asking_about_history(original_text)
+        
+        # Load conversation history from MongoDB
+        # If asking about history, load more (last 20); otherwise last 3
+        context_limit = 20 if asking_about_history else 3
+        conversation_context = load_conversation_context(user_id, limit=context_limit)
+        
+        if asking_about_history:
+            logger.info(f"User asking about history - loaded {len(conversation_context)} conversations")
         
         # Detect language to adjust temperature
         language = detect_language(original_text)
@@ -461,19 +861,36 @@ def process_command(text: str, user_id: str = "default_user") -> Dict[str, Any]:
         # Build messages with context
         messages = []
         
-        # Add conversation history (last 3 exchanges)
+        # Add conversation history
         for ctx in conversation_context:
             messages.append({"role": "user", "content": ctx["user"]})
             messages.append({"role": "assistant", "content": ctx["assistant"]})
         
-        # Add current user message
-        messages.append({"role": "user", "content": original_text})
+        # Build language instruction based on detected language
+        language_instruction = ""
+        max_tokens = MAX_TOKENS_SETTINGS['normal']  # Default 500
+        
+        if user_language == "hi":
+            language_instruction = "\n\nIMPORTANT: User spoke in Hindi. Respond in Hindi (Devanagari script). Keep responses concise and clear."
+            max_tokens = 800  # Hindi needs more tokens
+        elif user_language in ["unknown", "mixed"]:
+            language_instruction = "\n\nIMPORTANT: User spoke in Hinglish (Hindi-English mix). Respond in Hinglish using Roman script. Mix Hindi and English naturally - use English words for technical/difficult terms (like 'multithreading', 'computer', 'internet') and Hindi for simple conversational words. Example: 'Multithreading ek technique hai jisme ek saath kaafi saare tasks run hote hain.'"
+            max_tokens = 600  # Hinglish needs slightly more
+        # If English, no special instruction needed
+        
+        # Add special instruction if asking about history
+        if asking_about_history:
+            language_instruction += "\n\nNOTE: User is asking about our previous conversation. Reference the conversation history provided above to answer accurately."
+        
+        # Add current user message with language hint
+        user_message = original_text + language_instruction
+        messages.append({"role": "user", "content": user_message})
         
         # Call Qwen with personality (personality injected automatically in qwen_api.py)
         chat_response = qwen_api.chat_completion(
             messages,
             temperature=TEMPERATURE_SETTINGS['conversational'],
-            max_tokens=MAX_TOKENS_SETTINGS['normal']
+            max_tokens=max_tokens  # Use language-specific token limit
         )
         
         # � INTERNAL: Detect if response expects follow-up

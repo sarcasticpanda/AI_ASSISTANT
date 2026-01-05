@@ -24,27 +24,28 @@ def _get_groq_api_key() -> str:
     return api_key
 
 
-def transcribe_online(audio_file_path: str, language: str = "en") -> str:
+def transcribe_online(audio_file_path: str, language: str = None) -> dict:
     """
-    Transcribe audio file using Groq Whisper API.
+    Transcribe audio file using Groq Whisper API with automatic language detection.
     
     Args:
         audio_file_path: Path to audio file
-        language: Language code (default: "en")
+        language: Language code (None = auto-detect, "en" = English, "hi" = Hindi)
     
     Returns:
-        str: Transcribed text
+        dict: {"text": str, "language": str}
+        Example: {"text": "नमस्ते", "language": "hi"}
     
     Example:
-        text = transcribe_online("recording.mp3")
-        # Returns: "Hello, how are you?"
+        result = transcribe_online("recording.mp3")
+        # Returns: {"text": "नमस्ते, आप कैसे हैं?", "language": "hi"}
     
     curl equivalent:
         curl -X POST https://api.groq.com/openai/v1/audio/transcriptions \
           -H "Authorization: Bearer YOUR_GROQ_KEY" \
           -F "file=@recording.mp3" \
           -F "model=whisper-large-v3" \
-          -F "language=en"
+          (no language param = auto-detect)
     """
     if not os.path.exists(audio_file_path):
         raise FileNotFoundError(f"Audio file not found: {audio_file_path}")
@@ -70,11 +71,18 @@ def transcribe_online(audio_file_path: str, language: str = "en") -> str:
             "file": (os.path.basename(audio_file_path), audio_file, "audio/mpeg")
         }
         
+        # Build data dict - only include language if specified
         data = {
             "model": "whisper-large-v3",  # Groq's Whisper model
-            "language": language,
-            "response_format": "json"
+            "response_format": "verbose_json"  # Get language info too
         }
+        
+        # Only add language if specified (None = auto-detect)
+        if language:
+            data["language"] = language
+            logger.info(f"Using specified language: {language}")
+        else:
+            logger.info("Auto-detecting language...")
         
         try:
             logger.info("Sending request to Groq API...")
@@ -91,10 +99,15 @@ def transcribe_online(audio_file_path: str, language: str = "en") -> str:
             
             result = response.json()
             text = result.get("text", "")
+            detected_language = result.get("language", "unknown")
             
+            logger.info(f"Detected language: {detected_language}")
             logger.info(f"Transcribed: '{text[:50]}...'")
             
-            return text.strip()
+            return {
+                "text": text.strip(),
+                "language": detected_language
+            }
         
         except requests.exceptions.RequestException as e:
             logger.error(f"Groq API request failed: {e}")
@@ -106,7 +119,10 @@ def transcribe_online(audio_file_path: str, language: str = "en") -> str:
             except:
                 pass
             
-            return f"[Transcription failed: {e}]"
+            return {
+                "text": f"[Transcription failed: {e}]",
+                "language": "unknown"
+            }
 
 
 def transcribe_with_openai(audio_file_path: str, language: str = "en") -> str:

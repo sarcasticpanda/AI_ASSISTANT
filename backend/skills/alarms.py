@@ -151,12 +151,16 @@ def parse_alarm_from_text(text: str) -> tuple:
         if desc_match:
             description = desc_match.group(1)
     
-    # Pattern: "at HH:MM"
-    match = re.search(r"at (\d{1,2}):?(\d{2})?\s*(am|pm)?", text)
+    # Pattern: "at HH:MM" or "for HH:MM" or "at Hpm/am"
+    match = re.search(r"(?:at|for)\s+(\d{1,2}):?(\d{2})?\s*(am|pm)?", text)
     if match and not scheduled_time:
         hour = int(match.group(1))
         minute = int(match.group(2)) if match.group(2) else 0
         am_pm = match.group(3)
+        
+        # If no AM/PM specified but hour <= 12, assume PM for convenience
+        if not am_pm and 1 <= hour <= 12:
+            am_pm = "pm"
         
         # Convert to 24-hour format
         if am_pm == "pm" and hour != 12:
