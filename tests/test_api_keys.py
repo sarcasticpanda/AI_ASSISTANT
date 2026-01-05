@@ -41,7 +41,7 @@ print()
 
 # Test Groq
 print("🔍 Testing Groq API...")
-groq_key = "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"
+groq_key = os.getenv("GROQ_API_KEY", "")  # Load from environment variable or leave empty
 
 try:
     response = requests.get(
